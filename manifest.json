@@ -1,0 +1,164 @@
+{
+  "manifest_version": "0.3",
+  "name": "Windows-MCP",
+  "version": "0.6.5",
+  "description": "MCP Server that enables Claude to interact with Windows OS",
+  "long_description": "Windows-MCP is an open-source project that enables seamless integration between AI agents and the Windows operating system. Acting as an MCP server, it bridges the gap between large language models (LLMs) and the Windows OS, allowing agents to perform tasks such as **file navigation, application control, UI interaction, QA testing, and more**.\n\n**KEY FEATURES**\n- **Seamless Windows Integration**: Interacts natively with Windows UI elements, opens applications, controls windows, simulates user input, and more.\n- **Use Any LLM (Vision Optional)**: Does not rely on traditional computer vision techniques or fine-tuned models. Works with any LLM, reducing complexity and setup time.\n- **Rich Toolset for UI Automation**: Includes tools for keyboard and mouse control, window management, and capturing window or UI state.\n- **Lightweight & Open-Source**: Minimal dependencies with full source code available under the MIT license.\n- **Customizable & Extendable**: Easily adapt or extend tools to suit custom automation workflows or AI integrations.\n- **Real-Time Interaction**: Typical latency between actions ranges from `0.2` to `0.9` seconds, depending on system load, active applications, and LLM inference speed.\n\n**MINIMUM REQUIREMENTS**\n- **Python 3.13+**\n- **UV Package Manager** — `curl -LsSf https://astral.sh/uv/install.sh | sh`\n",
+  "author": {
+    "name": "CursorTouch",
+    "url": "https://cursortouch.com/"
+  },
+  "homepage": "https://cursortouch.com/",
+  "documentation": "https://github.com/CursorTouch/Windows-MCP",
+  "icon": "assets/logo.png",
+  "screenshots": [
+    "assets/screenshots/screenshot_1.png",
+    "assets/screenshots/screenshot_2.png",
+    "assets/screenshots/screenshot_3.png"
+  ],
+  "server": {
+    "type": "python",
+    "entry_point": "./src/windows_mcp/__main__.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "${__dirname}",
+        "run",
+        "windows-mcp"
+      ],
+      "env": {
+        "ANONYMIZED_TELEMETRY": "${user_config.anonymized_telemetry}",
+        "MODE": "${user_config.mode}",
+        "SANDBOX_ID": "${user_config.sandbox_id}",
+        "API_KEY": "${user_config.api_key}"
+      }
+    }
+  },
+  "user_config": {
+    "mode": {
+      "type": "string",
+      "title": "Mode (local or remote)",
+      "description": "Set to 'local' to run directly on your machine, or 'remote' to use cloud-hosted Windows automation via windowsmcp.io. Spin up a Windows sandbox in seconds with no local setup needed. Remote mode requires a Sandbox ID and API Key from the dashboard at windowsmcp.io.",
+      "required": false,
+      "default": "local"
+    },
+    "sandbox_id": {
+      "type": "string",
+      "title": "Sandbox ID",
+      "description": "The sandbox/VM identifier from the windowsmcp.io. Required when mode is set to 'remote'.",
+      "required": false
+    },
+    "api_key": {
+      "type": "string",
+      "title": "API Key",
+      "description": "Your API key from the windowsmcp.io. Required when mode is set to 'remote'.",
+      "required": false
+    },
+    "anonymized_telemetry": {
+      "type": "boolean",
+      "title": "Anonymized Telemetry",
+      "description": "Windows-MCP collects basic usage data to help improve the MCP server. No personal information, tool arguments, or tool outputs are tracked.",
+      "required": false,
+      "default": true
+    }
+  },
+  "tools": [
+    {
+      "name": "App",
+      "description": "Manages Windows applications with three modes: 'launch' (opens the prescibed application), 'resize' (adjusts active window size/position), 'switch' (brings specific window into focus)."
+    },
+    {
+      "name": "Shell",
+      "description": "A comprehensive system tool for executing any PowerShell commands. Use it to navigate the file system, manage files and processes, and execute system-level operations. Capable of accessing web content, interacting with network resources, and performing complex administrative tasks."
+    },
+    {
+      "name": "File",
+      "description": "Manages file system operations with eight modes: 'read' (read text file contents), 'write' (create/overwrite/append to files), 'copy' (copy files or directories), 'move' (move or rename), 'delete' (delete files or directories), 'list' (list directory contents), 'search' (find files by glob pattern), 'info' (get metadata like size, dates, type). Relative paths are resolved from the user's Desktop folder. Use absolute paths to access other locations."
+    },
+    {
+      "name": "Snapshot",
+      "description": "Captures complete desktop state including: system language, focused/opened windows, interactive elements (buttons, text fields, links, menus with coordinates), and scrollable areas. Set use_vision=True to include screenshot. Set use_dom=True for browser content to get web page elements instead of browser UI. Always call this first to understand the current desktop state before taking actions."
+    },
+    {
+      "name": "Click",
+      "description": "Performs mouse clicks at specified coordinates [x, y]. Supports button types: 'left' for selection/activation, 'right' for context menus, 'middle'. Supports clicks: 0=hover only (no click), 1=single click (select/focus), 2=double click (open/activate)."
+    },
+    {
+      "name": "Type",
+      "description": "Types text at specified coordinates [x, y]. Set clear=True to clear existing text first, False to append. Set press_enter=True to submit after typing. Set caret_position to 'start' (beginning), 'end' (end), or 'idle' (default)."
+    },
+    {
+      "name": "Scroll",
+      "description": "Scrolls at coordinates [x, y] or current mouse position if loc=None. Type: vertical (default) or horizontal. Direction: up/down for vertical, left/right for horizontal. wheel_times controls amount (1 wheel ≈ 3-5 lines). Use for navigating long content, lists, and web pages."
+    },
+    {
+      "name": "Move",
+      "description": "Moves mouse cursor to coordinates [x, y]. Set drag=True to perform a drag-and-drop operation from the current mouse position to the target coordinates. Default (drag=False) is a simple cursor move (hover)."
+    },
+    {
+      "name": "Shortcut",
+      "description": "Executes keyboard shortcuts using key combinations separated by +. Examples: \"ctrl+c\" (copy), \"ctrl+v\" (paste), \"alt+tab\" (switch apps), \"win+r\" (Run dialog), \"win\" (Start menu), \"ctrl+shift+esc\" (Task Manager). Use for quick actions and system commands."
+    },
+    {
+      "name": "Wait",
+      "description": "Pauses execution for specified duration in seconds. Use when waiting for: applications to launch/load, UI animations to complete, page content to render, dialogs to appear, or between rapid actions. Helps ensure UI is ready before next interaction."
+    },
+    {
+      "name": "Scrape",
+      "description": "Fetch content from a URL or the active browser tab. By default, performs a lightweight HTTP request to the URL. If you need to extract text from the active tab's DOM within the viewport, ensure the page is open in a browser and use Snapshot with use_dom=True first, then the agent will handle extraction."
+    },
+    {
+      "name": "MultiSelect",
+      "description": "Selects multiple items such as files, folders, or checkboxes if press_ctrl=True, or performs multiple clicks if False."
+    },
+    {
+      "name": "MultiEdit",
+      "description": "Enters text into multiple input fields at specified coordinates [[x,y,text], ...]."
+    },
+    {
+      "name": "Clipboard",
+      "description": "Manages Windows clipboard operations. Use mode=\"get\" to read current clipboard content, mode=\"set\" to set clipboard text."
+    },
+    {
+      "name": "Process",
+      "description": "Manages system processes. Use mode=\"list\" to list running processes with filtering and sorting options. Use mode=\"kill\" to terminate processes by PID or name."
+    },
+    {
+      "name": "SystemInfo",
+      "description": "Returns system information including CPU usage, memory usage, disk space, network stats, and uptime. Useful for monitoring system health remotely."
+    },
+    {
+      "name": "Notification",
+      "description": "Sends a Windows toast notification with a title and message. Useful for alerting the user remotely."
+    },
+    {
+      "name": "LockScreen",
+      "description": "Locks the Windows workstation. Requires the user to enter their password to unlock."
+    },
+    {
+      "name": "Registry",
+      "description": "Accesses the Windows Registry. Use mode=\"get\" to read a value, mode=\"set\" to create/update a value, mode=\"delete\" to remove a value or key, mode=\"list\" to list values and sub-keys under a path."
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "win32"
+    ],
+    "runtimes": {
+      "python": ">=3.13"
+    }
+  },
+  "keywords": [
+    "windows",
+    "automation",
+    "ai",
+    "mcp",
+    "computer-use"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CursorTouch/Windows-MCP"
+  }
+}

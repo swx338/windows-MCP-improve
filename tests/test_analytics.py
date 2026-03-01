@@ -1,0 +1,81 @@
+import asyncio
+from unittest.mock import AsyncMock
+
+import pytest
+
+from windows_mcp.analytics import with_analytics
+
+
+class TestWithAnalytics:
+    async def test_success_path(self):
+        mock_analytics = AsyncMock()
+
+        @with_analytics(mock_analytics, "test_tool")
+        async def my_tool():
+            return "result"
+
+        result = await my_tool()
+        assert result == "result"
+        mock_analytics.track_tool.assert_called_once()
+        call_args = mock_analytics.track_tool.call_args
+        assert call_args[0][0] == "test_tool"
+        assert call_args[0][1]["success"] is True
+        assert "duration_ms" in call_args[0][1]
+
+    async def test_error_path(self):
+        mock_analytics = AsyncMock()
+
+        @with_analytics(mock_analytics, "test_tool")
+        async def failing_tool():
+            raise ValueError("something broke")
+
+        with pytest.raises(ValueError, match="something broke"):
+            await failing_tool()
+        mock_analytics.track_error.assert_called_once()
+        call_args = mock_analytics.track_error.call_args
+        assert isinstance(call_args[0][0], ValueError)
+        assert call_args[0][1]["tool_name"] == "test_tool"
+
+    async def test_no_analytics_instance(self):
+        @with_analytics(None, "test_tool")
+        async def my_tool():
+            return 42
+
+        result = await my_tool()
+        assert result == 42
+
+    async def test_duration_measurement(self):
+        mock_analytics = AsyncMock()
+
+        @with_analytics(mock_analytics, "test_tool")
+        async def slow_tool():
+            await asyncio.sleep(0.1)
+            return "done"
+
+        await slow_tool()
+        call_args = mock_analytics.track_tool.call_args
+        duration_ms = call_args[0][1]["duration_ms"]
+        assert duration_ms >= 50  # Should be ~100ms but allow margin
+
+    async def test_error_still_tracks_duration(self):
+        mock_analytics = AsyncMock()
+
+        @with_analytics(mock_analytics, "test_tool")
+        async def failing_tool():
+            await asyncio.sleep(0.05)
+            raise RuntimeError("fail")
+
+        with pytest.raises(RuntimeError):
+            await failing_tool()
+        call_args = mock_analytics.track_error.call_args
+        assert "duration_ms" in call_args[0][1]
+
+    async def test_return_value_preserved(self):
+        mock_analytics = AsyncMock()
+
+        @with_analytics(mock_analytics, "test_tool")
+        async def tool_with_complex_result():
+            return {"key": "value", "count": 42}
+
+        result = await tool_with_complex_result()
+        assert result == {"key": "value", "count": 42}
