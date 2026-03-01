@@ -78,6 +78,7 @@ class Desktop:
         use_dom: bool | str = False,
         as_bytes: bool | str = False,
         scale: float = 1.0,
+        vscreen_rect: tuple[int, int, int, int] | None = None,
     ) -> DesktopState:
         use_annotation = use_annotation is True or (
             isinstance(use_annotation, str) and use_annotation.lower() == "true"
@@ -121,7 +122,7 @@ class Desktop:
         if use_vision:
             if use_annotation:
                 nodes = tree_state.interactive_nodes
-                screenshot = self.get_annotated_screenshot(nodes=nodes)
+                screenshot = self.get_annotated_screenshot(nodes=nodes, vscreen_rect=vscreen_rect)
             else:
                 screenshot = self.get_screenshot()
 
@@ -520,12 +521,16 @@ class Desktop:
             has_non_ascii = any(ord(c) > 127 for c in text)
             if has_non_ascii:
                 old_clipboard = uia.GetClipboardText()
-                uia.SetClipboardText(text)
-                sleep(0.05)
-                uia.SendKeys("{Ctrl}v", waitTime=0.1)
-                sleep(0.05)
-                if old_clipboard:
-                    uia.SetClipboardText(old_clipboard)
+                try:
+                    uia.SetClipboardText(text)
+                    sleep(0.05)
+                    uia.SendKeys("{Ctrl}v", waitTime=0.1)
+                    sleep(0.05)
+                finally:
+                    try:
+                        uia.SetClipboardText(old_clipboard)
+                    except Exception:
+                        pass
             else:
                 escaped_text = _escape_text_for_sendkeys(text)
                 uia.SendKeys(escaped_text, interval=0.02, waitTime=0.05)
@@ -573,7 +578,6 @@ class Desktop:
             x, y = loc[0], loc[1]
         else:
             x, y = loc
-        x, y = loc
         sleep(0.5)
         cx, cy = uia.GetCursorPos()
         uia.DragDrop(cx, cy, x, y, moveSpeed=1)
@@ -594,17 +598,20 @@ class Desktop:
                 sendkeys_str += "{" + name + "}"
         uia.SendKeys(sendkeys_str, interval=0.01)
 
-    def multi_select(self, press_ctrl: bool | str = False, locs: list[tuple[int, int]] = []):
+    def multi_select(self, press_ctrl: bool | str = False, locs: list[tuple[int, int]] | None = None):
         press_ctrl = press_ctrl is True or (
             isinstance(press_ctrl, str) and press_ctrl.lower() == "true"
         )
+        if locs is None:
+            locs = []
         if press_ctrl:
             uia.PressKey(uia.Keys.VK_CONTROL, waitTime=0.05)
         for loc in locs:
             x, y = loc
             uia.Click(x, y, waitTime=0.2)
             sleep(0.5)
-        uia.ReleaseKey(uia.Keys.VK_CONTROL, waitTime=0.05)
+        if press_ctrl:
+            uia.ReleaseKey(uia.Keys.VK_CONTROL, waitTime=0.05)
 
     def multi_edit(self, locs: list[tuple[int, int, str]]):
         for loc in locs:
@@ -639,11 +646,11 @@ class Desktop:
         return None
 
     def is_window_visible(self, window: uia.Control) -> bool:
-        is_minimized = self.get_window_status(window) != Status.MINIMIZED
+        is_not_minimized = self.get_window_status(window) != Status.MINIMIZED
         size = window.BoundingRectangle
         area = size.width() * size.height()
         is_overlay = self.is_overlay_window(window)
-        return not is_overlay and is_minimized and area > 10
+        return not is_overlay and is_not_minimized and area > 10
 
     def is_overlay_window(self, element: uia.Control) -> bool:
         no_children = len(element.GetChildren()) == 0
@@ -868,7 +875,11 @@ class Desktop:
             logger.warning("Failed to capture virtual screen, using primary screen")
             return ImageGrab.grab()
 
-    def get_annotated_screenshot(self, nodes: list[TreeElementNode]) -> Image.Image:
+    def get_annotated_screenshot(
+        self,
+        nodes: list[TreeElementNode],
+        vscreen_rect: tuple[int, int, int, int] | None = None,
+    ) -> Image.Image:
         screenshot = self.get_screenshot()
         draw = ImageDraw.Draw(screenshot)
         font_size = 12
@@ -880,7 +891,10 @@ class Desktop:
         def get_random_color():
             return "#{:06x}".format(random.randint(0, 0xFFFFFF))
 
-        left_offset, top_offset, vscreen_w, vscreen_h = uia.GetVirtualScreenRect()
+        if vscreen_rect is not None:
+            left_offset, top_offset, vscreen_w, vscreen_h = vscreen_rect
+        else:
+            left_offset, top_offset, vscreen_w, vscreen_h = uia.GetVirtualScreenRect()
 
         for label, node in enumerate(nodes):
             box = node.bounding_box

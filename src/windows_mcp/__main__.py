@@ -118,7 +118,6 @@ async def lifespan(app: FastMCP):
 
     try:
         watchdog.start()
-        await asyncio.sleep(1)  # Simulate startup latency
         yield
     finally:
         if watchdog:
@@ -140,7 +139,7 @@ mcp = FastMCP(name="windows-mcp", instructions=instructions, lifespan=lifespan)
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "App-Tool")
+@with_analytics(lambda: analytics, "App-Tool")
 def app_tool(mode:Literal['launch','resize','switch']='launch',name:str|None=None,window_loc:list[int]|None=None,window_size:list[int]|None=None, ctx: Context = None):
     window_loc = _parse_loc(window_loc)
     window_size = _parse_loc(window_size)
@@ -159,7 +158,7 @@ def app_tool(mode:Literal['launch','resize','switch']='launch',name:str|None=Non
         openWorldHint=True,
     ),
 )
-@with_analytics(analytics, "Powershell-Tool")
+@with_analytics(lambda: analytics, "Powershell-Tool")
 def powershell_tool(command: str, timeout: int = 30, ctx: Context = None) -> str:
     try:
         response, status_code = desktop.execute_command(command, timeout)
@@ -179,7 +178,7 @@ def powershell_tool(command: str, timeout: int = 30, ctx: Context = None) -> str
         openWorldHint=False
     )
     )
-@with_analytics(analytics, "FileSystem-Tool")
+@with_analytics(lambda: analytics, "FileSystem-Tool")
 def file_system_tool(
     mode: Literal['read', 'write', 'copy', 'move', 'delete', 'list', 'search', 'info'],
     path: str,
@@ -257,7 +256,7 @@ def file_system_tool(
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "State-Tool")
+@with_analytics(lambda: analytics, "State-Tool")
 def state_tool(use_vision:bool|str=True,use_dom:bool|str=False, ctx: Context = None):
     global _vscreen_left, _vscreen_top, _vscreen_width, _vscreen_height
     try:
@@ -276,7 +275,7 @@ def state_tool(use_vision:bool|str=True,use_dom:bool|str=False, ctx: Context = N
 
         coord_transform = _to_normalized_coords
         
-        desktop_state=desktop.get_state(use_vision=use_vision,use_dom=use_dom,as_bytes=False,scale=scale)
+        desktop_state=desktop.get_state(use_vision=use_vision,use_dom=use_dom,as_bytes=False,scale=scale,vscreen_rect=vscreen_rect)
         
         interactive_elements=desktop_state.tree_state.interactive_elements_to_string(coord_transform=coord_transform)
         scrollable_elements=desktop_state.tree_state.scrollable_elements_to_string(coord_transform=coord_transform)
@@ -289,7 +288,10 @@ def state_tool(use_vision:bool|str=True,use_dom:bool|str=False, ctx: Context = N
         screenshot_bytes = None
         if use_vision and desktop_state.screenshot is not None:
             buffered = io.BytesIO()
-            desktop_state.screenshot.save(buffered, format="PNG")
+            img = desktop_state.screenshot
+            if img.mode == "RGBA":
+                img = img.convert("RGB")
+            img.save(buffered, format="JPEG", quality=85)
             screenshot_bytes = buffered.getvalue()
             buffered.close()
     except Exception as e:
@@ -317,7 +319,7 @@ def state_tool(use_vision:bool|str=True,use_dom:bool|str=False, ctx: Context = N
     {interactive_elements or "No interactive elements found."}
 
     List of Scrollable Elements (coords are EXACT — use them directly):
-    {scrollable_elements or 'No scrollable elements found.'}''')]+([Image(data=screenshot_bytes,format='png')] if use_vision and screenshot_bytes else [])
+    {scrollable_elements or 'No scrollable elements found.'}''')]+([Image(data=screenshot_bytes,format='jpeg')] if use_vision and screenshot_bytes else [])
 
 @mcp.tool(
     name="Click",
@@ -336,7 +338,7 @@ def state_tool(use_vision:bool|str=True,use_dom:bool|str=False, ctx: Context = N
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Click-Tool")
+@with_analytics(lambda: analytics, "Click-Tool")
 def click_tool(
     loc: list[int] | str | None = None,
     button: Literal["left", "right", "middle"] = "left",
@@ -364,7 +366,7 @@ def click_tool(
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Type-Tool")
+@with_analytics(lambda: analytics, "Type-Tool")
 def type_tool(
     loc: list[int] | str = None,
     text: str = "",
@@ -399,7 +401,7 @@ def type_tool(
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Scroll-Tool")
+@with_analytics(lambda: analytics, "Scroll-Tool")
 def scroll_tool(
     loc: list[int] | str | None = None,
     type: Literal["horizontal", "vertical"] = "vertical",
@@ -415,11 +417,11 @@ def scroll_tool(
     response = desktop.scroll(loc, type, direction, wheel_times)
     if response:
         return response
-    return (
-        f"Scrolled {type} {direction} by {wheel_times} wheel times" + f" at ({loc[0]},{loc[1]})."
-        if loc
-        else ""
-    )
+    msg = f"Scrolled {type} {direction} by {wheel_times} wheel times"
+    if loc:
+        msg += f" at ({loc[0]},{loc[1]})"
+    msg += "."
+    return msg
 
 
 @mcp.tool(
@@ -439,7 +441,7 @@ def scroll_tool(
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Move-Tool")
+@with_analytics(lambda: analytics, "Move-Tool")
 def move_tool(
     loc: list[int] | str | None = None,
     drag: bool | str = False,
@@ -472,7 +474,7 @@ def move_tool(
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Shortcut-Tool")
+@with_analytics(lambda: analytics, "Shortcut-Tool")
 def shortcut_tool(shortcut: str, ctx: Context = None):
     desktop.shortcut(shortcut)
     return f"Pressed {shortcut}."
@@ -489,7 +491,7 @@ def shortcut_tool(shortcut: str, ctx: Context = None):
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Wait-Tool")
+@with_analytics(lambda: analytics, "Wait-Tool")
 def wait_tool(duration: int, ctx: Context = None) -> str:
     time.sleep(duration)
     return f"Waited for {duration} seconds."
@@ -506,7 +508,7 @@ def wait_tool(duration: int, ctx: Context = None) -> str:
         openWorldHint=True,
     ),
 )
-@with_analytics(analytics, "Scrape-Tool")
+@with_analytics(lambda: analytics, "Scrape-Tool")
 def scrape_tool(url: str, use_dom: bool | str = False, ctx: Context = None) -> str:
     use_dom = use_dom is True or (isinstance(use_dom, str) and use_dom.lower() == "true")
     if not use_dom:
@@ -538,7 +540,7 @@ def scrape_tool(url: str, use_dom: bool | str = False, ctx: Context = None) -> s
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Multi-Select-Tool")
+@with_analytics(lambda: analytics, "Multi-Select-Tool")
 def multi_select_tool(
     locs: list[list[int]] | str = None, press_ctrl: bool | str = True, ctx: Context = None
 ) -> str:
@@ -563,7 +565,7 @@ def multi_select_tool(
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Multi-Edit-Tool")
+@with_analytics(lambda: analytics, "Multi-Edit-Tool")
 def multi_edit_tool(locs: list[list] | str = None, ctx: Context = None) -> str:
     if isinstance(locs, str):
         import json
@@ -588,7 +590,7 @@ def multi_edit_tool(locs: list[list] | str = None, ctx: Context = None) -> str:
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Clipboard-Tool")
+@with_analytics(lambda: analytics, "Clipboard-Tool")
 def clipboard_tool(
     mode: Literal["get", "set"], text: str | None = None, ctx: Context = None
 ) -> str:
@@ -632,7 +634,7 @@ def clipboard_tool(
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Process-Tool")
+@with_analytics(lambda: analytics, "Process-Tool")
 def process_tool(
     mode: Literal["list", "kill"],
     name: str | None = None,
@@ -665,7 +667,7 @@ def process_tool(
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "SystemInfo-Tool")
+@with_analytics(lambda: analytics, "SystemInfo-Tool")
 def system_info_tool(ctx: Context = None) -> str:
     try:
         return desktop.get_system_info()
@@ -684,7 +686,7 @@ def system_info_tool(ctx: Context = None) -> str:
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "Notification-Tool")
+@with_analytics(lambda: analytics, "Notification-Tool")
 def notification_tool(title: str, message: str, ctx: Context = None) -> str:
     try:
         return desktop.send_notification(title, message)
@@ -703,7 +705,7 @@ def notification_tool(title: str, message: str, ctx: Context = None) -> str:
         openWorldHint=False,
     ),
 )
-@with_analytics(analytics, "LockScreen-Tool")
+@with_analytics(lambda: analytics, "LockScreen-Tool")
 def lock_screen_tool(ctx: Context = None) -> str:
     try:
         return desktop.lock_screen()
@@ -722,7 +724,7 @@ def lock_screen_tool(ctx: Context = None) -> str:
         openWorldHint=False
     )
 )
-@with_analytics(analytics, "Registry-Tool")
+@with_analytics(lambda: analytics, "Registry-Tool")
 def registry_tool(mode: Literal['get', 'set', 'delete', 'list'], path: str, name: str | None = None, value: str | None = None, type: Literal['String', 'DWord', 'QWord', 'Binary', 'MultiString', 'ExpandString'] = 'String', ctx: Context = None) -> str:
     try:
         if mode == 'get':

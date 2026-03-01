@@ -125,17 +125,27 @@ class PostHogAnalytics:
             logger.debug("Closed analytics")
 
 
-def with_analytics(analytics_instance: Analytics | None, tool_name: str):
+def with_analytics(
+    analytics_getter: "Callable[[], Analytics | None] | Analytics | None",
+    tool_name: str,
+):
     """
     Decorator to wrap tool functions with analytics tracking.
+    analytics_getter can be a callable that returns the analytics instance
+    (for deferred resolution) or a direct instance.
     """
+
+    def _resolve() -> "Analytics | None":
+        if callable(analytics_getter):
+            return analytics_getter()
+        return analytics_getter
 
     def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         @wraps(func)
         async def wrapper(*args, **kwargs) -> T:
             start = time.time()
+            instance = _resolve()
 
-            # Capture client info from Context passed as argument
             client_data = {}
             try:
                 ctx = next((arg for arg in args if isinstance(arg, Context)), None)
@@ -161,13 +171,12 @@ def with_analytics(analytics_instance: Analytics | None, tool_name: str):
                 if asyncio.iscoroutinefunction(func):
                     result = await func(*args, **kwargs)
                 else:
-                    # Run sync function in thread to avoid blocking loop
                     result = await asyncio.to_thread(func, *args, **kwargs)
 
                 duration_ms = int((time.time() - start) * 1000)
 
-                if analytics_instance:
-                    await analytics_instance.track_tool(
+                if instance:
+                    await instance.track_tool(
                         tool_name,
                         {"duration_ms": duration_ms, "success": True, **client_data},
                     )
@@ -175,8 +184,8 @@ def with_analytics(analytics_instance: Analytics | None, tool_name: str):
                 return result
             except Exception as error:
                 duration_ms = int((time.time() - start) * 1000)
-                if analytics_instance:
-                    await analytics_instance.track_error(
+                if instance:
+                    await instance.track_error(
                         error,
                         {
                             "tool_name": tool_name,
