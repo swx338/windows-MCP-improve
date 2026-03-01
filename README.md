@@ -8,7 +8,7 @@
 
 **原项目问题**：使用像素坐标 + 截图缩放（如 2560×1440 缩小到 1920×1080），缩放/反缩放过程中误差被放大，导致鼠标点击位置偏移。
 
-**改进方案**：采用 0-1000 归一化坐标系（参考 [qwen_autogui](https://github.com/showlab/ShowUI) 的做法）：
+**改进方案**：采用 0-1000 归一化坐标系（参考 [qwen_autogui](https://github.com/tech-shrimp/qwen_autogui) 的做法）：
 - `(0, 0)` = 屏幕左上角，`(1000, 1000)` = 屏幕右下角
 - 元素列表中的坐标自动转换为 0-1000 空间
 - Click/Move/Type/Scroll 等工具自动将 0-1000 反归一化为物理像素坐标
@@ -119,7 +119,7 @@ uv run windows-mcp
 ## 致谢
 
 - 原项目：[CursorTouch/Windows-MCP](https://github.com/CursorTouch/Windows-MCP)
-- 坐标系统参考：[qwen_autogui](https://github.com/showlab/ShowUI) 的 0-1000 归一化方案
+- 坐标系统参考：[qwen_autogui](https://github.com/tech-shrimp/qwen_autogui) 的 0-1000 归一化方案
 
 ## 许可证
 
