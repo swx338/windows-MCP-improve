@@ -1,455 +1,89 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/cursortouch-windows-mcp-badge.png)](https://mseep.ai/app/cursortouch-windows-mcp)
+# Windows-MCP-Improve
 
-<div align="center">
-  <h1>🪟 Windows-MCP</h1>
+基于 [CursorTouch/Windows-MCP](https://github.com/CursorTouch/Windows-MCP) 改进，主要解决了**鼠标点击不准确**和**中文输入失败**的问题。
 
-  <a href="https://github.com/CursorTouch/Windows-MCP/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-  </a>
-  <img src="https://img.shields.io/badge/python-3.13%2B-blue" alt="Python">
-  <img src="https://img.shields.io/badge/platform-Windows%207–11-blue" alt="Platform: Windows 7 to 11">
-  <img src="https://img.shields.io/github/last-commit/CursorTouch/Windows-MCP" alt="Last Commit">
-  <br>
-  <a href="https://x.com/CursorTouch">
-    <img src="https://img.shields.io/badge/follow-%40CursorTouch-1DA1F2?logo=twitter&style=flat" alt="Follow on Twitter">
-  </a>
-  <a href="https://discord.com/invite/Aue9Yj2VzS">
-    <img src="https://img.shields.io/badge/Join%20on-Discord-5865F2?logo=discord&logoColor=white&style=flat" alt="Join us on Discord">
-  </a>
+## 改进内容
 
-</div>
+### 1. 坐标系统重构：0-1000 归一化坐标
 
-<br>
+**原项目问题**：使用像素坐标 + 截图缩放（如 2560×1440 缩小到 1920×1080），缩放/反缩放过程中误差被放大，导致鼠标点击位置偏移。
 
-**Windows-MCP** is a lightweight, open-source project that enables seamless integration between AI agents and the Windows operating system. Acting as an MCP server bridges the gap between LLMs and the Windows operating system, allowing agents to perform tasks such as **file navigation, application control, UI interaction, QA testing,** and more.
+**改进方案**：采用 0-1000 归一化坐标系（参考 [qwen_autogui](https://github.com/showlab/ShowUI) 的做法）：
+- `(0, 0)` = 屏幕左上角，`(1000, 1000)` = 屏幕右下角
+- 元素列表中的坐标自动转换为 0-1000 空间
+- Click/Move/Type/Scroll 等工具自动将 0-1000 反归一化为物理像素坐标
+- 与 qwen3.5-plus 等多模态模型的视觉坐标估算能力更匹配
 
-mcp-name: io.github.CursorTouch/Windows-MCP
+### 2. 鼠标点击修复：SetCursorPos + 相对模式
 
-## Updates
-- Added VM support for Windows-MCP. Check (windowsmcp.io)[https://windowsmcp.io/] for more details.
-- Windows-MCP reached `2M+ Users` in [Claude Desktop Extensiosn](https://claude.ai/directory). 
-- Try out [🪟Windows-Use](https://pypi.org/project/windows-use/), an agent built using Windows-MCP.
-- Windows-MCP is now available on [PyPI](https://pypi.org/project/windows-mcp/) (thus supports `uvx windows-mcp`)
-- Windows-MCP is added to [MCP Registry](https://github.com/modelcontextprotocol/registry)
+**原项目问题**：`mouse_event` 使用绝对坐标模式（`MOUSEEVENTF_ABSOLUTE`）进行坐标归一化，在不同 DPI 和多显示器配置下经常出现偏移。
 
-### Supported Operating Systems
+**改进方案**：
+- 先用 `SetCursorPos(x, y)` 精确移动光标（该 API 在所有 Windows 配置下都可靠）
+- 再用 `mouse_event` 的相对模式（dx=0, dy=0）触发点击事件
+- 完全绕过了 `mouse_event` 不可靠的绝对坐标归一化
 
-- Windows 7
-- Windows 8, 8.1
-- Windows 10
-- Windows 11  
+### 3. 中文输入支持
 
-## 🎥 Demos
+**原项目问题**：`Type` 工具通过 `SendKeys`（`KEYEVENTF_UNICODE`）逐字符发送，在中文 IME 环境和微信等应用中经常失败。
 
-<https://github.com/user-attachments/assets/d0e7ed1d-6189-4de6-838a-5ef8e1cad54e>
+**改进方案**：
+- 检测到非 ASCII 文本时，自动切换为**剪贴板粘贴**方式（保存 → 设置剪贴板 → Ctrl+V → 恢复原剪贴板）
+- 纯 ASCII 文本仍使用 `SendKeys`（效率更高）
 
-<https://github.com/user-attachments/assets/d2b372dc-8d00-4d71-9677-4c64f5987485>
+### 4. 截图注解增强：坐标锚点
 
-## ✨ Key Features
+**原项目问题**：截图上的元素标注只显示索引号（如 `5`），对模型估算未标注元素的坐标没有帮助。
 
-- **Seamless Windows Integration**  
-  Interacts natively with Windows UI elements, opens apps, controls windows, simulates user input, and more.
+**改进方案**：
+- 标注标签显示索引 + 0-1000 坐标（如 `5(156,208)`）
+- 已标注元素成为"坐标锚点"，帮助模型通过临近参考更准确地估算未标注元素的位置
 
-- **Use Any LLM (Vision Optional)**
-   Unlike many automation tools, Windows-MCP doesn't rely on any traditional computer vision techniques or specific fine-tuned models; it works with any LLMs, reducing complexity and setup time.
+### 5. 参数解析增强
 
-- **Rich Toolset for UI Automation**  
-  Includes tools for basic keyboard, mouse operation and capturing window/UI state.
+**原项目问题**：部分 MCP 客户端传递的 `loc` 参数是字符串格式（如 `"[200, 300]"`），导致类型错误。
 
-- **Lightweight & Open-Source**  
-  Minimal dependencies and easy setup with full source code available under MIT license.
+**改进方案**：
+- 添加 `_parse_loc` / `_parse_locs` 函数，支持 JSON 字符串、逗号分隔、空格分隔等多种格式
+- 所有接受坐标参数的工具都经过统一解析
 
-- **Customizable & Extendable**  
-  Easily adapt or extend tools to suit your unique automation or AI integration needs.
+### 6. 其他改进
 
-- **Real-Time Interaction**  
-  Typical latency between actions (e.g., from one mouse click to the next) ranges from **0.2 to 0.9 secs**, and may slightly vary based on the number of active applications and system load, also the inferencing speed of the llm.
+- 移除截图 padding（消除标注导致的系统性坐标偏移）
+- DPI 感知初始化（`SetProcessDpiAwareness(PerMonitorDpiAware)`）
+- 虚拟屏幕偏移处理（支持多显示器配置）
+- Snapshot 默认开启截图（`use_vision=True`）
+- 输出中添加坐标系统说明，引导模型正确使用坐标
 
-- **DOM Mode for Browser Automation**  
-  Special `use_dom=True` mode for State-Tool that focuses exclusively on web page content, filtering out browser UI elements for cleaner, more efficient web automation.
+## 安装使用
 
-## 🛠️Installation
+### 前置条件
 
-**Note:** When you install this MCP server for the first time it may take a minute or two because of installing the dependencies in `pyproject.toml`. In the first run the server may timeout ignore it and restart it.
-
-### Prerequisites
-
+- Windows 10/11
 - Python 3.13+
-- UV (Package Manager) from Astra, install with `pip install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- `English` as the default language in Windows preferred else disable the `App-Tool` in the MCP Server for Windows with other languages.
-<details>
-  <summary>Install in Claude Desktop</summary>
+- [UV 包管理器](https://github.com/astral-sh/uv)
 
-  1. Install [Claude Desktop](https://claude.ai/download) and
+### 从源码运行
 
-```shell
-npm install -g @anthropic-ai/mcpb
+```bash
+git clone https://github.com/swx338/windows-MCP-improve.git
+cd windows-MCP-improve
+uv sync
+uv run windows-mcp
 ```
 
+### 在 MCP 客户端中配置
 
-  2. Configure the extension:
-
-  **Option A: Install from PyPI (Recommended)**
-  
-  Use `uvx` to run the latest version directly from PyPI.
-
-  Add this to your `claude_desktop_config.json`:
-  ```json
-  {
-    "mcpServers": {
-      "windows-mcp": {
-        "command": "uvx",
-        "args": [
-          "windows-mcp"
-        ]
-      }
-    }
-  }
-  ```
-
-  **Option B: Install from Source**
-
-  1. Clone the repository:
-  ```shell
-  git clone https://github.com/CursorTouch/Windows-MCP.git
-  cd Windows-MCP
-  ```
-
-  2. Add this to your `claude_desktop_config.json`:
-  ```json
-  {
-    "mcpServers": {
-      "windows-mcp": {
-        "command": "uv",
-        "args": [
-          "--directory",
-          "<path to the windows-mcp directory>",
-          "run",
-          "windows-mcp"
-        ]
-      }
-    }
-  }
-  ```
-
-
-
-  3. Open Claude Desktop and enjoy! 🥳
-
-
-  5. Enjoy 🥳.
-
-  **Claude Desktop MSIX (Windows Store)**
-
-  The MSIX-packaged Claude Desktop virtualizes `%APPDATA%`. Config lives at:
-  `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
-  (not `%APPDATA%\Claude\`). The "Edit Config" button may open the wrong file.
-
-  Electron apps also do not inherit PATH, so `uv`/`uvx` can fail with `spawn ENOENT`. Use the **full absolute path** to `uv.exe`:
-
-  ```json
-  {
-    "mcpServers": {
-      "windows-mcp": {
-        "command": "C:\\Users\\<user>\\.local\\bin\\uv.exe",
-        "args": [
-          "--directory",
-          "C:\\Users\\<user>\\AppData\\Local\\Packages\\Claude_pzs8sxrjxfjjc\\LocalCache\\Roaming\\Claude\\Claude Extensions\\ant.dir.cursortouch.windows-mcp",
-          "run",
-          "windows-mcp"
-        ]
-      }
-    }
-  }
-  ```
-
-  Replace `<user>` with your username. To find `uv.exe`, run `where uv` in a terminal; common location is `%USERPROFILE%\.local\bin\uv.exe`. For PyPI install, use `args: ["run", "windows-mcp"]` instead of `--directory`/path. Save as **UTF-8 without BOM** (PowerShell `Set-Content -Encoding UTF8` adds a BOM that breaks the JSON parser).
-
-  For additional Claude Desktop integration troubleshooting, see the [MCP documentation](https://modelcontextprotocol.io/quickstart/server#claude-for-desktop-integration-issues).
-</details>
-
-<details>
-  <summary>Install in Perplexity Desktop</summary>
-
-  1. Install [Perplexity Desktop](https://apps.microsoft.com/detail/xp8jnqfbqh6pvf):
-
-  2. Clone the repository.
-
-```shell
-git clone https://github.com/CursorTouch/Windows-MCP.git
-
-cd Windows-MCP
-```
-  
-  3. Open Perplexity Desktop:
-
-Go to `Settings->Connectors->Add Connector->Advanced`
-
-  4. Enter the name as `Windows-MCP`, then paste the following JSON in the text area.
-
-
-  **Option A: Install from PyPI (Recommended)**
-
-  ```json
-  {
-    "command": "uvx",
-    "args": [
-      "windows-mcp"
-    ]
-  }
-  ```
-
-  **Option B: Install from Source**
-
-  ```json
-  {
-    "command": "uv",
-    "args": [
-      "--directory",
-      "<path to the windows-mcp directory>",
-      "run",
-      "windows-mcp"
-    ]
-  }
-  ```
-
-
-5. Click `Save` and Enjoy 🥳.
-
-For additional Claude Desktop integration troubleshooting, see the [Perplexity MCP Support](https://www.perplexity.ai/help-center/en/articles/11502712-local-and-remote-mcps-for-perplexity). The documentation includes helpful tips for checking logs and resolving common issues.
-</details>
-
-<details>
-  <summary> Install in Gemini CLI</summary>
-
-  1. Install Gemini CLI:
-
-```shell
-npm install -g @google/gemini-cli
-```
-
-
-  2. Configure the server in `%USERPROFILE%/.gemini/settings.json`:
-
-
-  3. Navigate to `%USERPROFILE%/.gemini` in File Explorer and open `settings.json`.
-
-  4. Add the `windows-mcp` config in the `settings.json` and save it.
+以 OpenCode 为例，在配置文件中添加：
 
 ```json
 {
-  "theme": "Default",
-  ...
-  "mcpServers": {
+  "mcp": {
     "windows-mcp": {
-      "command": "uvx",
-      "args": [
-        "windows-mcp"
-      ]
-    }
-  }
-}
-```
-*Note: To run from source, replace the command with `uv` and args with `["--directory", "<path>", "run", "windows-mcp"]`.*
-
-
-  5. Rerun Gemini CLI in terminal. Enjoy 🥳
-</details>
-
-<details>
-  <summary>Install in Qwen Code</summary>
-  1. Install Qwen Code:
-
-```shell
-npm install -g @qwen-code/qwen-code@latest
-```
-
-   2. Configure the server in `%USERPROFILE%/.qwen/settings.json`:
-
-
-  3. Navigate to `%USERPROFILE%/.qwen/settings.json`.
-
-  4. Add the `windows-mcp` config in the `settings.json` and save it.
-
-```json
-{
-  "mcpServers": {
-    "windows-mcp": {
-      "command": "uvx",
-      "args": [
-        "windows-mcp"
-      ]
-    }
-  }
-}
-```
-*Note: To run from source, replace the command with `uv` and args with `["--directory", "<path>", "run", "windows-mcp"]`.*
-
-
-  5. Rerun Qwen Code in terminal. Enjoy 🥳
-</details>
-
-<details>
-  <summary>Install in Codex CLI</summary>
-  1. Install Codex CLI:
-
-```shell
-npm install -g @openai/codex
-```
-
-  2. Configure the server in `%USERPROFILE%/.codex/config.toml`:
-
-  3. Navigate to `%USERPROFILE%/.codex/config.toml`.
-
-  4. Add the `windows-mcp` config in the `config.toml` and save it.
-
-```toml
-[mcp_servers.windows-mcp]
-command="uvx"
-args=[
-  "windows-mcp"
-]
-```
-*Note: To run from source, replace the command with `uv` and args with `["--directory", "<path>", "run", "windows-mcp"]`.*
-
-
-  5. Rerun Codex CLI in terminal. Enjoy 🥳
-</details>
-
----
-
-## 🖥️ Modes
-
-Windows-MCP supports two operating modes: **Local** (default) and **Remote**.
-
-### Local Mode (Default)
-
-In local mode, Windows-MCP runs directly on your Windows machine and exposes its tools to the connected MCP client. This is the standard setup for personal use.
-
-```shell
-# Runs with stdio transport (default)
-uvx windows-mcp
-
-# Or with SSE/Streamable HTTP for network access
-uvx windows-mcp --transport sse --host localhost --port 8000
-uvx windows-mcp --transport streamable-http --host localhost --port 8000
-```
-
-No additional environment variables are needed. The MCP client connects directly to the server.
-
-### Remote Mode
-
-In remote mode, Windows-MCP acts as a **proxy** that connects to the [windowsmcp.io](https://windowsmcp.io) enabling cloud-hosted Windows automation. This is designed for scenarios where the MCP client is remote and connects through the dashboard, which routes requests to a Windows VM running Windows-MCP.
-
-**Required environment variables:**
-
-| Variable | Description |
-|---|---|
-| `MODE` | Set to `remote` |
-| `SANDBOX_ID` | The sandbox/VM identifier from the dashboard |
-| `API_KEY` | Your Windows-MCP API key |
-
-**Example configuration:**
-
-```json
-{
-  "mcpServers": {
-    "windows-mcp": {
-      "command": "uvx",
-      "args": [
-        "windows-mcp"
-      ],
-      "env": {
-        "MODE": "remote",
-        "SANDBOX_ID": "your-sandbox-id",
-        "API_KEY": "your-api-key"
-      }
-    }
-  }
-}
-```
-
-### Transport Options
-
-| Transport | Flag | Use Case |
-|---|---|---|
-| `stdio` (default) | `--transport stdio` | Direct connection from MCP clients like Claude Desktop, Cursor, etc. |
-| `sse` | `--transport sse --host HOST --port PORT` | Network-accessible via Server-Sent Events |
-| `streamable-http` | `--transport streamable-http --host HOST --port PORT` | Network-accessible via HTTP streaming (recommended for production) |
-
----
-
-## 🔨MCP Tools
-
-MCP Client can access the following tools to interact with Windows:
-
-- `Click`: Click on the screen at the given coordinates.
-- `Type`: Type text on an element (optionally clears existing text).
-- `Scroll`: Scroll vertically or horizontally on the window or specific regions.
-- `Move`: Move mouse pointer or drag (set drag=True) to coordinates.
-- `Shortcut`: Press keyboard shortcuts (`Ctrl+c`, `Alt+Tab`, etc).
-- `Wait`: Pause for a defined duration.
-- `Snapshot`: Combined snapshot of default language, browser, active apps and interactive, textual and scrollable elements along with screenshot of the desktop. Supports `use_dom=True` for browser content extraction (web page elements only) and `use_vision=True` for including screenshots.
-- `App`: To launch an application from the start menu, resize or move the window and switch between apps.
-- `Shell`: To execute PowerShell commands.
-- `Scrape`: To scrape the entire webpage for information.
-- `MultiSelect`: Select multiple items (files, folders, checkboxes) with optional Ctrl key.
-- `MultiEdit`: Enter text into multiple input fields at specified coordinates.
-- `Clipboard`: Read or set Windows clipboard content.
-- `Process`: List running processes or terminate them by PID or name.
-- `SystemInfo`: Get system information including CPU, memory, disk, network stats, and uptime.
-- `Notification`: Send a Windows toast notification with a title and message.
-- `LockScreen`: Lock the Windows workstation.
-- `Registry`: Read, write, delete, or list Windows Registry values and keys.
-
-## 🤝 Connect with Us
-Stay updated and join our community:
-
-- 📢 Follow us on [X](https://x.com/CursorTouch) for the latest news and updates
-
-- 💬 Join our [Discord Community](https://discord.com/invite/Aue9Yj2VzS)
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=CursorTouch/Windows-MCP&type=Date)](https://www.star-history.com/#CursorTouch/Windows-MCP&Date)
-
-## 👥 Contributors
-
-Thanks to all the amazing people who have contributed to Windows-MCP! 🎉
-
-<a href="https://github.com/CursorTouch/Windows-MCP/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=CursorTouch/Windows-MCP" />
-</a>
-
-We appreciate every contribution, whether it's code, documentation, bug reports, or feature suggestions. Want to contribute? Check out our [Contributing Guidelines](CONTRIBUTING)!
-
-## 🔒 Security
-
-**Important**: Windows-MCP operates with full system access and can perform irreversible operations. Please review our comprehensive security guidelines before deployment.
-
-For detailed security information, including:
-- Tool-specific risk assessments
-- Deployment recommendations
-- Vulnerability reporting procedures
-- Compliance and auditing guidelines
-
-Please read our [Security Policy](SECURITY.md).
-
-## 📊 Telemetry
-
-Windows-MCP collects usage data to help improve the MCP server. No personal information, no tool arguments, no outputs are tracked.
-
-To disable telemetry, add the following to your MCP client configuration:
-
-```json
-{
-  "mcpServers": {
-    "windows-mcp": {
-      "command": "uvx",
-      "args": [
-        "windows-mcp"
-      ],
-      "env": {
+      "type": "local",
+      "command": ["uv", "--directory", "<项目路径>", "run", "windows-mcp"],
+      "enabled": true,
+      "environment": {
         "ANONYMIZED_TELEMETRY": "false"
       }
     }
@@ -457,43 +91,36 @@ To disable telemetry, add the following to your MCP client configuration:
 }
 ```
 
-For detailed information on what data is collected and how it is handled, please refer to the [Telemetry and Data Privacy](SECURITY.md#telemetry-and-data-privacy) section in our Security Policy.
+其他 MCP 客户端（Claude Desktop、Cursor、Gemini CLI 等）的配置方式类似，参考原项目文档。
 
-## 📝 Limitations
+## MCP 工具列表
 
-- Selecting specific sections of the text in a paragraph, as the MCP is relying on a11y tree. (⌛ Working on it.)
-- `Type-Tool` is meant for typing text, not programming in IDE because of it types program as a whole in a file. (⌛ Working on it.)
-- This MCP server can't be used to play video games 🎮.
+| 工具 | 功能 |
+|------|------|
+| **Snapshot** | 截取桌面状态：窗口列表、交互元素（0-1000 坐标）、截图 |
+| **Click** | 鼠标点击（左/右/中键，单击/双击/悬停） |
+| **Type** | 文本输入（支持中文，支持清除、回车） |
+| **Move** | 移动鼠标 / 拖拽 |
+| **Scroll** | 滚动（垂直/水平） |
+| **Shortcut** | 键盘快捷键 |
+| **App** | 启动/切换/调整窗口 |
+| **PowerShell** | 执行 PowerShell 命令 |
+| **FileSystem** | 文件操作（读/写/复制/移动/删除/搜索） |
+| **Scrape** | 网页内容抓取 |
+| **Clipboard** | 剪贴板读写 |
+| **Process** | 进程管理 |
+| **SystemInfo** | 系统信息 |
+| **Notification** | 桌面通知 |
+| **MultiSelect** | 批量选择 |
+| **MultiEdit** | 批量输入 |
+| **LockScreen** | 锁屏 |
+| **Registry** | 注册表操作 |
 
-## 🪪 License
+## 致谢
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- 原项目：[CursorTouch/Windows-MCP](https://github.com/CursorTouch/Windows-MCP)
+- 坐标系统参考：[qwen_autogui](https://github.com/showlab/ShowUI) 的 0-1000 归一化方案
 
-## 🙏 Acknowledgements
+## 许可证
 
-Windows-MCP makes use of several excellent open-source projects that power its Windows automation features:
-
-- [UIAutomation](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows)
-
-- [PyAutoGUI](https://github.com/asweigart/pyautogui)
-
-Huge thanks to the maintainers and contributors of these libraries for their outstanding work and open-source spirit.
-
-## 🤝Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING](CONTRIBUTING) for setup instructions and development guidelines.
-
-Made with ❤️ by [CursorTouch](https://github.com/CursorTouch)
-
-## Citation
-
-```bibtex
-@software{
-  author       = {CursorTouch},
-  title        = {Windows-MCP: Lightweight open-source project for integrating LLM agents with Windows},
-  year         = {2024},
-  publisher    = {GitHub},
-  url={https://github.com/CursorTouch/Windows-MCP}
-}
-```
-
+本项目基于原项目的 [MIT 许可证](LICENSE.md) 进行分发。
