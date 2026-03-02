@@ -307,10 +307,11 @@ class Desktop:
         name: str | None = None,
         loc: tuple[int, int] | None = None,
         size: tuple[int, int] | None = None,
+        args: str | None = None,
     ):
         match mode:
             case "launch":
-                response, status, pid = self.launch_app(name)
+                response, status, pid = self.launch_app(name, args=args)
                 if status != 0:
                     return response
 
@@ -344,7 +345,19 @@ class Desktop:
                 else:
                     return response
 
-    def launch_app(self, name: str) -> tuple[str, int, int]:
+    def _resolve_launch_target(self, appid: str) -> str:
+        """Resolve .lnk shortcuts to their actual executable path."""
+        if appid.lower().endswith(".lnk"):
+            resolve_cmd = (
+                f"(New-Object -ComObject WScript.Shell)"
+                f".CreateShortcut({ps_quote(appid)}).TargetPath"
+            )
+            target, status = self.execute_command(resolve_cmd)
+            if status == 0 and target.strip():
+                return target.strip()
+        return appid
+
+    def launch_app(self, name: str, args: str | None = None) -> tuple[str, int, int]:
         apps_map = self.get_apps_from_start_menu()
         matched_app = process.extractOne(name, apps_map.keys(), score_cutoff=70)
         if matched_app is None:
@@ -354,10 +367,19 @@ class Desktop:
         if appid is None:
             return (f"{name.title()} not found in start menu.", 1, 0)
 
+        args_part = ""
+        if args:
+            safe_args = ps_quote(args)
+            args_part = f" -ArgumentList {safe_args}"
+
         pid = 0
         if os.path.exists(appid) or "\\" in appid:
-            safe = ps_quote(appid)
-            command = f"Start-Process {safe} -PassThru | Select-Object -ExpandProperty Id"
+            launch_target = self._resolve_launch_target(appid) if args else appid
+            safe = ps_quote(launch_target)
+            command = (
+                f"Start-Process {safe}{args_part} -PassThru"
+                " | Select-Object -ExpandProperty Id"
+            )
             response, status = self.execute_command(command)
             if status == 0 and response.strip().isdigit():
                 pid = int(response.strip())
@@ -370,9 +392,23 @@ class Desktop:
                 .isalnum()
             ):
                 return (f"Invalid app identifier: {appid}", 1, 0)
-            safe = ps_quote(f"shell:AppsFolder\\{appid}")
-            command = f"Start-Process {safe}"
-            response, status = self.execute_command(command)
+            if args:
+                safe_name = ps_quote(name)
+                command = (
+                    f"Start-Process {safe_name}{args_part} -PassThru"
+                    " | Select-Object -ExpandProperty Id"
+                )
+                response, status = self.execute_command(command)
+                if status == 0 and response.strip().isdigit():
+                    pid = int(response.strip())
+                else:
+                    safe = ps_quote(f"shell:AppsFolder\\{appid}")
+                    command = f"Start-Process {safe}{args_part}"
+                    response, status = self.execute_command(command)
+            else:
+                safe = ps_quote(f"shell:AppsFolder\\{appid}")
+                command = f"Start-Process {safe}"
+                response, status = self.execute_command(command)
 
         return response, status, pid
 
@@ -501,14 +537,15 @@ class Desktop:
 
     def type(
         self,
-        loc: tuple[int, int],
-        text: str,
+        loc: tuple[int, int] | None = None,
+        text: str = "",
         caret_position: Literal["start", "idle", "end"] = "idle",
         clear: bool | str = False,
         press_enter: bool | str = False,
     ):
-        x, y = loc
-        uia.Click(x, y)
+        if loc is not None:
+            x, y = loc
+            uia.Click(x, y)
         if caret_position == "start":
             uia.SendKeys("{Home}", waitTime=0.05)
         elif caret_position == "end":
@@ -518,22 +555,17 @@ class Desktop:
             uia.SendKeys("{Ctrl}a", waitTime=0.05)
             uia.SendKeys("{Back}", waitTime=0.05)
         if text:
-            has_non_ascii = any(ord(c) > 127 for c in text)
-            if has_non_ascii:
-                old_clipboard = uia.GetClipboardText()
+            old_clipboard = uia.GetClipboardText()
+            try:
+                uia.SetClipboardText(text)
+                sleep(0.05)
+                uia.SendKeys("{Ctrl}v", waitTime=0.1)
+                sleep(0.05)
+            finally:
                 try:
-                    uia.SetClipboardText(text)
-                    sleep(0.05)
-                    uia.SendKeys("{Ctrl}v", waitTime=0.1)
-                    sleep(0.05)
-                finally:
-                    try:
-                        uia.SetClipboardText(old_clipboard)
-                    except Exception:
-                        pass
-            else:
-                escaped_text = _escape_text_for_sendkeys(text)
-                uia.SendKeys(escaped_text, interval=0.02, waitTime=0.05)
+                    uia.SetClipboardText(old_clipboard)
+                except Exception:
+                    pass
         if press_enter is True or (isinstance(press_enter, str) and press_enter.lower() == "true"):
             uia.SendKeys("{Enter}", waitTime=0.05)
 

@@ -17,12 +17,70 @@ from typing import Literal
 from enum import Enum
 import logging
 import asyncio
+import ctypes
+from ctypes import wintypes
 import click
 import time
 import os
 import io
 
 logger = logging.getLogger(__name__)
+
+# --- Host process protection ---
+_host_pids: set[int] = set()
+
+
+def _init_host_pids():
+    """Collect PIDs of the MCP server and all ancestor processes to prevent self-destruction."""
+    global _host_pids
+    pid = os.getpid()
+
+    kernel32 = ctypes.windll.kernel32
+    ntdll = ctypes.windll.ntdll
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+    class PROCESS_BASIC_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("ExitStatus", ctypes.c_long),
+            ("PebBaseAddress", ctypes.c_void_p),
+            ("AffinityMask", ctypes.c_void_p),
+            ("BasePriority", ctypes.c_long),
+            ("UniqueProcessId", ctypes.c_void_p),
+            ("InheritedFromUniqueProcessId", ctypes.c_void_p),
+        ]
+
+    for _ in range(10):
+        if pid is None or pid <= 0 or pid in _host_pids:
+            break
+        _host_pids.add(pid)
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            break
+        try:
+            pbi = PROCESS_BASIC_INFORMATION()
+            status = ntdll.NtQueryInformationProcess(
+                handle, 0, ctypes.byref(pbi), ctypes.sizeof(pbi), None
+            )
+            if status != 0:
+                break
+            pid = pbi.InheritedFromUniqueProcessId
+        finally:
+            kernel32.CloseHandle(handle)
+
+    logger.info(f"Host process protection: guarding PIDs {_host_pids}")
+
+
+def _is_foreground_host_window() -> bool:
+    """Check if the current foreground window belongs to the host process chain."""
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        pid = wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value in _host_pids
+    except Exception:
+        return False
 
 load_dotenv()
 
@@ -66,9 +124,16 @@ def _parse_loc(loc) -> list[int] | None:
     if loc is None:
         return None
     if isinstance(loc, (list, tuple)):
-        return [int(v) for v in loc]
+        try:
+            return [int(v) for v in loc]
+        except (ValueError, TypeError) as e:
+            raise ValueError(
+                f"loc must contain numeric values, got {loc!r}. "
+                "Expected format: [x, y] with integer coordinates in 0-1000 range."
+            ) from e
     if isinstance(loc, str):
         import json
+
         try:
             parsed = json.loads(loc)
             if isinstance(parsed, list):
@@ -77,8 +142,18 @@ def _parse_loc(loc) -> list[int] | None:
             pass
         cleaned = loc.strip().strip("[]()").strip()
         parts = [p.strip() for p in cleaned.replace(",", " ").split()]
-        return [int(p) for p in parts if p]
-    raise ValueError(f"Cannot parse loc: {loc!r}")
+        try:
+            return [int(p) for p in parts if p]
+        except ValueError:
+            raise ValueError(
+                f"loc must be numeric coordinates, got {loc!r}. "
+                "Expected format: [x, y] with integer coordinates in 0-1000 range. "
+                "Use Snapshot first to find the target position, then pass coordinates."
+            )
+    raise ValueError(
+        f"Cannot parse loc: {loc!r}. "
+        "Expected format: [x, y] with integer coordinates in 0-1000 range."
+    )
 
 
 def _parse_locs(locs) -> list[list[int]]:
@@ -116,6 +191,8 @@ async def lifespan(app: FastMCP):
     screen_size = desktop.get_screen_size()
     watchdog.set_focus_callback(desktop.tree._on_focus_change)
 
+    _init_host_pids()
+
     try:
         watchdog.start()
         yield
@@ -130,7 +207,7 @@ mcp = FastMCP(name="windows-mcp", instructions=instructions, lifespan=lifespan)
 
 @mcp.tool(
     name="App",
-    description="Manages Windows applications with three modes: 'launch' (opens the prescibed application), 'resize' (adjusts active window size/position), 'switch' (brings specific window into focus).",
+    description="Manages Windows applications with three modes: 'launch' (opens the prescribed application, optionally with args e.g. a URL for browsers), 'resize' (adjusts active window size/position), 'switch' (brings specific window into focus). Example: App(mode='launch', name='chrome', args='https://www.bilibili.com') opens Chrome directly to the URL.",
     annotations=ToolAnnotations(
         title="App",
         readOnlyHint=False,
@@ -140,16 +217,23 @@ mcp = FastMCP(name="windows-mcp", instructions=instructions, lifespan=lifespan)
     ),
 )
 @with_analytics(lambda: analytics, "App-Tool")
-def app_tool(mode:Literal['launch','resize','switch']='launch',name:str|None=None,window_loc:list[int]|None=None,window_size:list[int]|None=None, ctx: Context = None):
+def app_tool(
+    mode: Literal["launch", "resize", "switch"] = "launch",
+    name: str | None = None,
+    args: str | None = None,
+    window_loc: list[int] | None = None,
+    window_size: list[int] | None = None,
+    ctx: Context = None,
+):
     window_loc = _parse_loc(window_loc)
     window_size = _parse_loc(window_size)
     if window_loc and len(window_loc) == 2:
         window_loc = _denormalize_loc(window_loc)
-    return desktop.app(mode,name,window_loc,window_size)
+    return desktop.app(mode, name, window_loc, window_size, args=args)
     
 @mcp.tool(
     name="PowerShell",
-    description="A comprehensive system tool for executing any PowerShell commands. Use it to navigate the file system, manage files and processes, and execute system-level operations. Capable of accessing web content (e.g., via Invoke-WebRequest), interacting with network resources, and performing complex administrative tasks. This tool provides full access to the underlying operating system capabilities, making it the primary interface for system automation, scripting, and deep system interaction.",
+    description="A comprehensive system tool for executing any PowerShell commands. Use it to navigate the file system, manage files and processes, and execute system-level operations. Capable of accessing web content (e.g., via Invoke-WebRequest), interacting with network resources, and performing complex administrative tasks. WARNING: Do NOT use Stop-Process, taskkill, or close commands targeting the terminal/shell that hosts the MCP server, as this will terminate the MCP connection. To switch between windows, use the App tool with mode='switch' instead.",
     annotations=ToolAnnotations(
         title="PowerShell",
         readOnlyHint=False,
@@ -246,7 +330,9 @@ def file_system_tool(
         'Set use_vision=True to include a screenshot. '
         'Set use_dom=True for browser DOM content. '
         'Always call this first before taking actions. '
-        'Use coordinates from the element list directly when the target element is listed.'
+        'Use coordinates from the element list directly when the target element is listed. '
+        'If the target window is behind another window, use App(mode=\'switch\', name=\'target\') '
+        'to bring it to the foreground. NEVER close windows just to access one behind them.'
     ),
     annotations=ToolAnnotations(
         title="Snapshot",
@@ -357,7 +443,7 @@ def click_tool(
 
 @mcp.tool(
     name="Type",
-    description="Types text at coordinates [x, y] in 0-1000 normalized space where (0,0)=top-left and (1000,1000)=bottom-right. Set clear=True to clear existing text first, False to append. Set press_enter=True to submit after typing. Set caret_position to 'start' (beginning), 'end' (end), or 'idle' (default).",
+    description="Types text at coordinates [x, y] in 0-1000 normalized space where (0,0)=top-left and (1000,1000)=bottom-right. If loc is omitted or null, types at the current cursor/focus position (useful after a Click). Set clear=True to clear existing text first, False to append. Set press_enter=True to submit after typing. Set caret_position to 'start' (beginning), 'end' (end), or 'idle' (default).",
     annotations=ToolAnnotations(
         title="Type",
         readOnlyHint=False,
@@ -368,7 +454,7 @@ def click_tool(
 )
 @with_analytics(lambda: analytics, "Type-Tool")
 def type_tool(
-    loc: list[int] | str = None,
+    loc: list[int] | str | None = None,
     text: str = "",
     clear: bool | str = False,
     caret_position: Literal["start", "idle", "end"] = "idle",
@@ -376,18 +462,21 @@ def type_tool(
     ctx: Context = None,
 ) -> str:
     loc = _parse_loc(loc)
-    if loc is None or len(loc) != 2:
-        raise ValueError("Location must be a list of exactly 2 integers [x, y]")
-    loc = _denormalize_loc(loc)
-    x, y = loc[0], loc[1]
+    phys_loc = None
+    if loc is not None:
+        if len(loc) != 2:
+            raise ValueError("Location must be a list of exactly 2 integers [x, y]")
+        phys_loc = _denormalize_loc(loc)
     desktop.type(
-        loc=loc,
+        loc=phys_loc,
         text=text,
         caret_position=caret_position,
         clear=clear,
         press_enter=press_enter,
     )
-    return f"Typed {text} at ({x},{y})."
+    if phys_loc:
+        return f"Typed '{text}' at ({phys_loc[0]},{phys_loc[1]})."
+    return f"Typed '{text}' at current cursor position."
 
 
 @mcp.tool(
@@ -465,7 +554,7 @@ def move_tool(
 
 @mcp.tool(
     name="Shortcut",
-    description='Executes keyboard shortcuts using key combinations separated by +. Examples: "ctrl+c" (copy), "ctrl+v" (paste), "alt+tab" (switch apps), "win+r" (Run dialog), "win" (Start menu), "ctrl+shift+esc" (Task Manager). Use for quick actions and system commands.',
+    description='Executes keyboard shortcuts using key combinations separated by +. Examples: "ctrl+c" (copy), "ctrl+v" (paste), "alt+tab" (switch apps), "win+r" (Run dialog), "win" (Start menu), "ctrl+shift+esc" (Task Manager). IMPORTANT: Never use alt+f4 to close the terminal/shell hosting the MCP server. To access a window behind another, use App(mode=\'switch\', name=\'target_app\') instead of closing the foreground window.',
     annotations=ToolAnnotations(
         title="Shortcut",
         readOnlyHint=False,
@@ -476,6 +565,13 @@ def move_tool(
 )
 @with_analytics(lambda: analytics, "Shortcut-Tool")
 def shortcut_tool(shortcut: str, ctx: Context = None):
+    normalized = shortcut.lower().replace(" ", "")
+    if normalized in ("alt+f4", "alt+{f4}") and _is_foreground_host_window():
+        return (
+            "BLOCKED: The foreground window hosts the MCP server. "
+            "Closing it would terminate the MCP connection. "
+            "Use App(mode='switch', name='target_app') to switch to another window instead."
+        )
     desktop.shortcut(shortcut)
     return f"Pressed {shortcut}."
 
